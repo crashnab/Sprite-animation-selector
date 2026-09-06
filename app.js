@@ -3,8 +3,8 @@
 
   const THUMB_WIDTH = 150;
   const THUMB_BATCH = 4;
-  const GIF_WORKER =
-    'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js';
+  // Local worker required: browsers block cross-origin Worker scripts from CDNs.
+  const GIF_WORKER = './gif.worker.js';
   const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|tif{1,2})$/i;
 
   /** @type {Map<string, { id: string, name: string, file: File, thumbUrl: string, width: number, height: number }>} */
@@ -576,7 +576,11 @@
   }
 
   async function exportGif() {
-    if (!timeline.length || busy) return;
+    if (!timeline.length) {
+      els.exportStatus.textContent = 'Add frames to the timeline before exporting';
+      return;
+    }
+    if (busy) return;
     if (typeof GIF === 'undefined') {
       setBusy(false, 'gif.js failed to load');
       return;
@@ -586,7 +590,6 @@
       const fps = getFps();
       const delayUnit = 1000 / fps;
 
-      // Determine output size from first frame
       const first = sources.get(timeline[0].sourceId);
       const probe = await createImageBitmap(first.file);
       const outW = probe.width;
@@ -594,8 +597,9 @@
       probe.close();
 
       await new Promise((resolve, reject) => {
+        let settled = false;
         const gif = new GIF({
-          workers: 2,
+          workers: 1,
           quality: 10,
           width: outW,
           height: outH,
@@ -603,12 +607,20 @@
         });
 
         gif.on('finished', (blob) => {
+          if (settled) return;
+          settled = true;
           downloadBlob(blob, 'sprite-animation.gif');
           resolve();
         });
         gif.on('progress', (p) => {
           els.exportStatus.textContent =
             'Encoding GIF… ' + Math.round(p * 100) + '%';
+        });
+        gif.on('abort', () => {
+          if (!settled) {
+            settled = true;
+            reject(new Error('GIF encoding aborted'));
+          }
         });
 
         (async () => {
@@ -617,29 +629,27 @@
               const item = timeline[i];
               const source = sources.get(item.sourceId);
               const canvas = await decodeToCanvas(source);
-              // Scale if sizes differ
+              let frameCanvas = canvas;
               if (canvas.width !== outW || canvas.height !== outH) {
-                const scaled = document.createElement('canvas');
-                scaled.width = outW;
-                scaled.height = outH;
-                scaled.getContext('2d').drawImage(canvas, 0, 0, outW, outH);
-                gif.addFrame(scaled, {
-                  delay: Math.max(20, Math.round(item.duration * delayUnit)),
-                  copy: true,
-                });
-              } else {
-                gif.addFrame(canvas, {
-                  delay: Math.max(20, Math.round(item.duration * delayUnit)),
-                  copy: true,
-                });
+                frameCanvas = document.createElement('canvas');
+                frameCanvas.width = outW;
+                frameCanvas.height = outH;
+                frameCanvas.getContext('2d').drawImage(canvas, 0, 0, outW, outH);
               }
+              gif.addFrame(frameCanvas, {
+                delay: Math.max(20, Math.round(item.duration * delayUnit)),
+                copy: true,
+              });
               els.exportStatus.textContent =
                 'Adding GIF frames… ' + (i + 1) + ' / ' + timeline.length;
               await yieldToUI();
             }
             gif.render();
           } catch (e) {
-            reject(e);
+            if (!settled) {
+              settled = true;
+              reject(e);
+            }
           }
         })();
       });
