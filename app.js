@@ -24,13 +24,17 @@
   let expandedIndex = 0;
   let busy = false;
   let naturalSize = { width: 1920, height: 1080 };
+  /** Currently selected sidebar source for canvas preview (not yet necessarily on timeline). */
+  let previewSourceId = null;
 
   const els = {
     folderInput: document.getElementById('folder-input'),
+    filesInput: document.getElementById('files-input'),
     loadStatus: document.getElementById('load-status'),
     thumbGrid: document.getElementById('thumb-grid'),
     canvas: document.getElementById('preview-canvas'),
     previewEmpty: document.getElementById('preview-empty'),
+    btnAddTimeline: document.getElementById('btn-add-timeline'),
     btnPlay: document.getElementById('btn-play'),
     btnStepBack: document.getElementById('btn-step-back'),
     btnStepForward: document.getElementById('btn-step-forward'),
@@ -211,6 +215,24 @@
   }
 
   async function renderCurrent() {
+    // Sidebar preview selection takes priority while paused
+    if (previewSourceId && sources.has(previewSourceId) && !playing) {
+      const source = sources.get(previewSourceId);
+      const bitmap = await loadBitmap(previewSourceId);
+      resizeCanvasToPanel();
+      drawLetterbox(bitmap);
+      els.previewEmpty.classList.add('hidden');
+      els.frameInfo.textContent = 'Preview · ' + source.name;
+      highlightTimeline(-1);
+      const expanded = buildExpanded();
+      updateScrubUI(
+        expanded.length ? Math.min(expandedIndex, expanded.length - 1) : 0,
+        Math.max(0, expanded.length - 1)
+      );
+      updateAddButton();
+      return;
+    }
+
     const expanded = buildExpanded();
     if (!expanded.length) {
       resizeCanvasToPanel();
@@ -220,6 +242,7 @@
       els.frameInfo.textContent = 'Frame — / —';
       highlightTimeline(-1);
       updateScrubUI(0, 0);
+      updateAddButton();
       return;
     }
     els.previewEmpty.classList.add('hidden');
@@ -236,6 +259,7 @@
     highlightTimeline(tick.itemId);
     updateScrubUI(expandedIndex, expanded.length - 1);
     prefetchNeighbors(expanded);
+    updateAddButton();
   }
 
   function prefetchNeighbors(expanded) {
@@ -267,11 +291,17 @@
     els.btnZip.disabled = !enabled;
   }
 
+  function updateAddButton() {
+    els.btnAddTimeline.disabled = busy || !previewSourceId || !sources.has(previewSourceId);
+  }
+
   function setBusy(state, message) {
     busy = state;
     els.exportStatus.textContent = message || '';
     els.folderInput.disabled = state;
+    if (els.filesInput) els.filesInput.disabled = state;
     updateExportButtons();
+    updateAddButton();
   }
 
   function stopPlayback() {
@@ -287,6 +317,8 @@
   function startPlayback() {
     const expanded = buildExpanded();
     if (!expanded.length) return;
+    previewSourceId = null;
+    renderSidebar();
     playing = true;
     playStart = performance.now();
     playOffsetMs = expandedIndex * frameMs();
@@ -326,6 +358,8 @@
   function step(delta) {
     const wasPlaying = playing;
     if (wasPlaying) stopPlayback();
+    previewSourceId = null;
+    renderSidebar();
     const expanded = buildExpanded();
     if (!expanded.length) return;
     expandedIndex = (expandedIndex + delta + expanded.length) % expanded.length;
@@ -333,38 +367,90 @@
     renderCurrent();
   }
 
+  function timelinePositionsFor(sourceId) {
+    const positions = [];
+    timeline.forEach((item, index) => {
+      if (item.sourceId === sourceId) positions.push(index + 1);
+    });
+    return positions;
+  }
+
   function renderSidebar() {
     els.thumbGrid.innerHTML = '';
-    const used = new Set(timeline.map((t) => t.sourceId));
     sources.forEach((source) => {
+      const positions = timelinePositionsFor(source.id);
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'thumb-item' + (used.has(source.id) ? ' in-timeline' : '');
+      btn.className =
+        'thumb-item' +
+        (positions.length ? ' in-timeline' : '') +
+        (previewSourceId === source.id ? ' is-previewing' : '');
       btn.setAttribute('role', 'listitem');
-      btn.title = 'Add ' + source.name;
+      btn.title = 'Preview ' + source.name;
       btn.dataset.sourceId = source.id;
+
       const img = document.createElement('img');
       img.src = source.thumbUrl;
       img.alt = source.name;
       img.loading = 'lazy';
+
+      if (positions.length) {
+        const mapBadge = document.createElement('span');
+        mapBadge.className = 'thumb-map-badge';
+        mapBadge.textContent = positions.join(',');
+        mapBadge.title = 'Timeline order: ' + positions.join(', ');
+        btn.appendChild(mapBadge);
+      }
+
       const label = document.createElement('span');
       label.className = 'thumb-label';
       label.textContent = source.name;
       btn.appendChild(img);
       btn.appendChild(label);
-      btn.addEventListener('click', () => addToTimeline(source.id));
+      btn.addEventListener('click', () => previewSource(source.id));
       els.thumbGrid.appendChild(btn);
     });
   }
 
-  function addToTimeline(sourceId) {
+  function previewSource(sourceId) {
     if (!sources.has(sourceId) || busy) return;
-    timeline.push({
+    if (playing) stopPlayback();
+    previewSourceId = sourceId;
+    renderSidebar();
+    updateAddButton();
+    renderCurrent();
+  }
+
+  function findInsertIndex(sourceId) {
+    const source = sources.get(sourceId);
+    if (!source) return timeline.length;
+    for (let i = 0; i < timeline.length; i++) {
+      const other = sources.get(timeline[i].sourceId);
+      if (!other) continue;
+      if (naturalSortName(source.name, other.name) < 0) return i;
+    }
+    return timeline.length;
+  }
+
+  function addPreviewToTimeline() {
+    if (!previewSourceId || !sources.has(previewSourceId) || busy) return;
+    const sourceId = previewSourceId;
+    const insertAt = findInsertIndex(sourceId);
+    timeline.splice(insertAt, 0, {
       id: uid('tl'),
       sourceId,
       duration: 1,
     });
-    expandedIndex = Math.max(0, buildExpanded().length - 1);
+
+    // Seek expanded scrub to the newly inserted clip
+    const expanded = buildExpanded();
+    let seek = 0;
+    for (let i = 0; i < insertAt; i++) {
+      seek += Math.max(1, Math.floor(timeline[i].duration) || 1);
+    }
+    expandedIndex = Math.min(seek, Math.max(0, expanded.length - 1));
+    playOffsetMs = expandedIndex * frameMs();
+
     renderTimeline();
     renderSidebar();
     updateExportButtons();
@@ -464,30 +550,56 @@
       const map = new Map(timeline.map((t) => [t.id, t]));
       timeline = ids.map((id) => map.get(id)).filter(Boolean);
       renderTimeline();
+      renderSidebar();
       renderCurrent();
     },
   });
 
-  async function handleFolderChange(event) {
-    const fileList = Array.from(event.target.files || []).filter(isImageFile);
-    if (!fileList.length) {
-      els.loadStatus.textContent = 'No image files found in that folder';
+  function fileKey(file) {
+    return file.name + '::' + file.size + '::' + (file.lastModified || 0);
+  }
+
+  function existingFileKeys() {
+    const keys = new Set();
+    sources.forEach((s) => keys.add(fileKey(s.file)));
+    return keys;
+  }
+
+  function resortSourcesMap() {
+    const ordered = Array.from(sources.values()).sort((a, b) =>
+      naturalSortName(a.name, b.name)
+    );
+    sources.clear();
+    ordered.forEach((s) => sources.set(s.id, s));
+  }
+
+  async function ingestFiles(fileList, label) {
+    const images = Array.from(fileList || []).filter(isImageFile);
+    if (!images.length) {
+      els.loadStatus.textContent = 'No image files found';
       return;
     }
 
-    stopPlayback();
-    clearBitmapCache();
-    revokeAllThumbs();
-    sources.clear();
-    timeline = [];
-    expandedIndex = 0;
+    const known = existingFileKeys();
+    const fresh = images.filter((f) => !known.has(fileKey(f)));
+    const skipped = images.length - fresh.length;
 
-    fileList.sort((a, b) => naturalSortName(a.name, b.name));
+    if (!fresh.length) {
+      els.loadStatus.textContent =
+        sources.size +
+        ' image' +
+        (sources.size === 1 ? '' : 's') +
+        ' loaded' +
+        (skipped ? ' (' + skipped + ' already loaded)' : '');
+      return;
+    }
+
+    fresh.sort((a, b) => naturalSortName(a.name, b.name));
     setBusy(true, 'Generating thumbnails…');
-    els.loadStatus.textContent = 'Loading 0 / ' + fileList.length;
+    els.loadStatus.textContent = 'Loading 0 / ' + fresh.length;
 
     let done = 0;
-    await mapPool(fileList, THUMB_BATCH, async (file) => {
+    await mapPool(fresh, THUMB_BATCH, async (file) => {
       try {
         const thumb = await makeThumbnail(file);
         const id = uid('src');
@@ -499,30 +611,40 @@
           width: thumb.width,
           height: thumb.height,
         });
-        if (!naturalSize.width || sources.size === 1) {
+        if (sources.size === 1 || !naturalSize.width) {
           naturalSize = { width: thumb.width, height: thumb.height };
         }
       } catch (err) {
         console.warn('Failed to thumbnail', file.name, err);
       }
       done += 1;
-      els.loadStatus.textContent = 'Loading ' + done + ' / ' + fileList.length;
+      els.loadStatus.textContent =
+        'Loading ' + done + ' / ' + fresh.length + (label ? ' (' + label + ')' : '');
     });
 
-    // Re-insert in sorted order (Map insertion may be concurrent)
-    const ordered = Array.from(sources.values()).sort((a, b) =>
-      naturalSortName(a.name, b.name)
-    );
-    sources.clear();
-    ordered.forEach((s) => sources.set(s.id, s));
-
+    resortSourcesMap();
     setBusy(false, '');
     els.loadStatus.textContent =
-      sources.size + ' image' + (sources.size === 1 ? '' : 's') + ' loaded';
+      sources.size +
+      ' image' +
+      (sources.size === 1 ? '' : 's') +
+      ' loaded' +
+      (skipped ? ' (+' + fresh.length + ' new, ' + skipped + ' skipped)' : '');
     renderSidebar();
     renderTimeline();
     updateExportButtons();
+    updateAddButton();
     await renderCurrent();
+  }
+
+  async function handleFolderChange(event) {
+    await ingestFiles(event.target.files, 'folder');
+    event.target.value = '';
+  }
+
+  async function handleFilesChange(event) {
+    await ingestFiles(event.target.files, 'files');
+    event.target.value = '';
   }
 
   function downloadBlob(blob, filename) {
@@ -725,6 +847,8 @@
 
   // Events
   els.folderInput.addEventListener('change', handleFolderChange);
+  els.filesInput.addEventListener('change', handleFilesChange);
+  els.btnAddTimeline.addEventListener('click', addPreviewToTimeline);
   els.btnPlay.addEventListener('click', togglePlay);
   els.btnStepBack.addEventListener('click', () => step(-1));
   els.btnStepForward.addEventListener('click', () => step(1));
@@ -735,6 +859,8 @@
   els.scrub.addEventListener('input', () => {
     const wasPlaying = playing;
     if (wasPlaying) stopPlayback();
+    previewSourceId = null;
+    renderSidebar();
     expandedIndex = Number(els.scrub.value) || 0;
     playOffsetMs = expandedIndex * frameMs();
     const max = Number(els.scrub.max) || 0;
@@ -755,4 +881,5 @@
   ctx.fillStyle = '#0c0c10';
   ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
   updateExportButtons();
+  updateAddButton();
 })();

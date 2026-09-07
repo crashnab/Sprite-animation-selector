@@ -11,19 +11,31 @@
     <aside class="sidebar" aria-label="Source frames">
       <div class="sidebar-header">
         <h1 class="brand">Sprite Curator</h1>
-        <p class="sidebar-hint">Load a folder of sequential stills, then build your loop.</p>
-        <label class="btn btn-secondary upload-btn" for="folder-input">
-          Upload Folder
-          <input
-            id="folder-input"
-            type="file"
-            accept="image/*"
-            webkitdirectory
-            directory
-            multiple
-            hidden
-          />
-        </label>
+        <p class="sidebar-hint">Load a folder or select files, preview frames, then build your loop.</p>
+        <div class="upload-row">
+          <label class="btn btn-secondary upload-btn" for="folder-input">
+            Upload Folder
+            <input
+              id="folder-input"
+              type="file"
+              accept="image/*"
+              webkitdirectory
+              directory
+              multiple
+              hidden
+            />
+          </label>
+          <label class="btn btn-secondary upload-btn" for="files-input">
+            Upload Files
+            <input
+              id="files-input"
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+            />
+          </label>
+        </div>
         <p id="load-status" class="status-text" aria-live="polite">No images loaded</p>
       </div>
       <div id="thumb-grid" class="thumb-grid" role="list"></div>
@@ -33,7 +45,12 @@
       <section class="preview-panel" aria-label="Preview player">
         <div class="canvas-wrap">
           <canvas id="preview-canvas" width="1280" height="720"></canvas>
-          <p id="preview-empty" class="preview-empty">Add frames to the timeline to preview</p>
+          <p id="preview-empty" class="preview-empty">Select a sidebar image to preview</p>
+        </div>
+        <div class="preview-actions">
+          <button type="button" id="btn-add-timeline" class="btn btn-primary btn-add-timeline" disabled>
+            Add to Timeline
+          </button>
         </div>
         <div class="playback-controls">
           <div class="control-row">
@@ -57,7 +74,7 @@
         <div class="timeline-header">
           <div>
             <h2>Active Sequence</h2>
-            <p class="sidebar-hint">Tap sidebar thumbs to add. Drag to reorder. Set hold duration per frame.</p>
+            <p class="sidebar-hint">Preview in the center, then Add to Timeline. Drag to reorder. Set hold duration per frame.</p>
           </div>
           <div class="export-actions">
             <button type="button" id="btn-export-gif" class="btn btn-primary" disabled>Export GIF</button>
@@ -67,7 +84,7 @@
         </div>
         <p id="export-status" class="status-text" aria-live="polite"></p>
         <div id="timeline" class="timeline" role="list"></div>
-        <p id="timeline-empty" class="timeline-empty">Timeline is empty — click images in the sidebar to add them</p>
+        <p id="timeline-empty" class="timeline-empty">Timeline is empty — preview a frame, then tap Add to Timeline</p>
       </section>
     </main>
   </div>
