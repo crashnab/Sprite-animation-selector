@@ -389,10 +389,14 @@
       btn.title = 'Preview ' + source.name;
       btn.dataset.sourceId = source.id;
 
+      const media = document.createElement('span');
+      media.className = 'thumb-media';
+
       const img = document.createElement('img');
       img.src = source.thumbUrl;
       img.alt = source.name;
       img.loading = 'lazy';
+      media.appendChild(img);
 
       if (positions.length) {
         const mapBadge = document.createElement('span');
@@ -405,7 +409,7 @@
       const label = document.createElement('span');
       label.className = 'thumb-label';
       label.textContent = source.name;
-      btn.appendChild(img);
+      btn.appendChild(media);
       btn.appendChild(label);
       btn.addEventListener('click', () => previewSource(source.id));
       els.thumbGrid.appendChild(btn);
